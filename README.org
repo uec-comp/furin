@@ -1,0 +1,215 @@
+* チュートリアル
+
+** VMの準備
+*** 共通設定
+    1. Ubuntu 14.04 Server がインストールされたVMを6台用意する．
+ 
+    2. それぞれのホスト名を {web01,cache[01-04],client01}.tutorial.cloud.localに設定する．
+
+       cloud@web01~$ cat /etc/hosts
+       ...
+       10.0.0.101	web01.tutorial.cloud.local	web01
+       10.0.0.102	cache01.tutorial.cloud.local	cache01
+       10.0.0.103	cache02.tutorial.cloud.local	cache02
+       10.0.0.104	cache03.tutorial.cloud.local	cache03
+       10.0.0.105	cache04.tutorial.cloud.local	cache04
+       10.0.0.106	client01.tutorial.cloud.local	client01
+
+       cloud@web01~$ cat /etc/hostname
+       web01
+
+    3. 各ノードでパッケージのアップデートを行う．
+ 
+       cloud@web01~$ sudo apt-get update && sudo apt-get dist-upgrade && sudo reboot
+
+    4. SSH tunnelの設定
+       rootユーザのパスワードを設定
+
+       sudo passwd
+
+       SSHの設定を変更
+       sudo vim /etc/ssh/sshd_config
+       PermitRootLogin yes
+       PermitTunnel yes
+
+       SSHサービスを再起動
+       sudo service ssh restart
+
+*** web01のセットアップ
+    
+    sudo apt-get install -y apache2 nmap iperf git ruby2.0 ruby2.0-dev ruby1.9.1-dev build-essential libreadline-dev traceroute
+    sudo gem install pry
+
+*** client01のセットアップ
+
+*** cache[01-04]のセットアップ
+
+    # apt-get install -y nmap iperf git ruby2.0 ruby2.0-dev ruby1.9.1-dev squid3 build-essential libreadline-dev traceroute
+    # gem install pry
+    # echo 1 > /proc/sys/net/ipv4/ip_forward
+
+	# iptables -I INPUT -p tcp --dport 22 -j ACCEPT
+	# iptables -I INPUT -p tcp --dport 80 -j ACCEPT
+	# iptables -I FORWARD -p tcp --dport 80 -j ACCEPT
+	# iptables -I PREROUTING -p tcp --dport 80 -j REDIRECT --to-ports 3128
+
+	# cat << EOF >> /etc/squid3/squid.conf
+	acl public src 0.0.0.0/0
+	http_access allow public
+	http_port 3129
+	http_port 3128 intercept
+	cache_mem 2048 MB
+	maximum_object_size_in_memory 2048 MB
+	EOF
+
+	# service squid3 restart
+
+
+** ネットワークの設定
+
+   client01(tun0)  - cache01(tun0) (192.168.10.0/24)
+   cache01(tun1) - cache02(tun0) (192.168.20.0/24)
+   cache01(tun2) - cache03(tun0) (192.168.30.0/24)
+   cache02(tun1) - cache04(tun0) (192.168.40.0/24)
+   cache03(tun1) - cache04(tun1) (192.168.50.0/24)
+   cache04(tun2) - web01(tun0)   (192.168.60.0/24)
+
+                      /- cache02 -\
+   client01 -- cache01             cache04 -- web01
+                      \- cache03 -/
+
+*** トンネルデバイスの作成とIPアドレスの設定
+
+    cache01, cache04それぞれで以下のコマンド実行し，トンネルデバイスを作成する．
+
+    cache01:
+    sudo ssh client01.tutorial.cloud.local -l root -N -f -w 0:0
+    sudo ssh cache02.tutorial.cloud.local -l root -N -f -w 1:0
+    sudo ssh cache03.tutorial.cloud.local -l root -N -f -w 2:0
+    
+    cache04:
+    sudo ssh cache02.tutorial.cloud.local -l root -N -f -w 0:1
+    sudo ssh cache03.tutorial.cloud.local -l root -N -f -w 1:1
+    sudo ssh web01.tutorial.cloud.local -l root -N -f -w 2:0
+
+    トンネルデバイスが作成されたら，各ノードでIPアドレスを設定する
+
+    client01:
+    sudo ip a add 192.168.10.1/24 dev tun0
+    sudo ip link set tun0 up
+
+    cache01:
+    sudo ip a add 192.168.10.2/24 dev tun0
+    sudo ip a add 192.168.20.1/24 dev tun1
+    sudo ip a add 192.168.30.1/24 dev tun2
+    sudo ip link set tun0 up
+    sudo ip link set tun1 up
+    sudo ip link set tun2 up
+
+    cache02:
+    sudo ip a add 192.168.20.2/24 dev tun0
+    sudo ip a add 192.168.40.1/24 dev tun1
+    sudo ip link set tun0 up
+    sudo ip link set tun1 up
+
+    cache03:
+    sudo ip a add 192.168.30.2/24 dev tun0
+    sudo ip a add 192.168.50.1/24 dev tun1
+    sudo ip link set tun0 up
+    sudo ip link set tun1 up
+
+    cache04
+    sudo ip a add 192.168.40.2/24 dev tun0
+    sudo ip a add 192.168.50.2/24 dev tun1
+    sudo ip a add 192.168.60.1/24 dev tun2
+    sudo ip link set tun0 up
+    sudo ip link set tun1 up
+    sudo ip link set tun2 up
+
+    web01:
+    sudo ip a add 192.168.60.2/24 dev tun0
+    sudo ip link set tun0 up
+
+    各ノードでpingの疎通確認
+
+    client01:
+    ping -c3 192.168.10.2
+
+    cache01:
+    ping -c3 192.168.10.1
+    ping -c3 192.168.20.2
+    ping -c3 192.168.30.2
+
+    cache02:
+    ping -c3 192.168.20.1
+    ping -c3 192.168.40.2
+
+    cache03:
+    ping -c3 192.168.30.1
+    ping -c3 192.168.50.2
+
+    cache04:
+    ping -c3 192.168.40.1
+    ping -c3 192.168.50.1
+    ping -c3 192.168.60.2
+
+    web01:
+    ping -c3 192.168.60.1
+
+    ルーティングテーブルの初期設定
+    client01:
+   
+
+    sudo ip r add 192.168.0.0/16 via 192.168.10.2
+
+    cache01:
+    ip r | grep via | grep tun | sed 's/^/sudo ip r del /g' | while read line; do $line; done && sudo ip r add 192.168.40.0/24 via 192.168.20.2 && sudo ip r add 192.168.50.0/24 via 192.168.30.2 && sudo ip r add 192.168.60.0/24 via 192.168.20.2
+
+    cache02:
+    ip r | grep via | grep tun | sed 's/^/sudo ip r del /g' | while read line; do $line; done && sudo ip r add 192.168.10.0/24 via 192.168.20.1 && sudo ip r add 192.168.30.0/24 via 192.168.20.1 && sudo ip r add 192.168.50.0/24 via 192.168.40.2 && sudo ip r add 192.168.60.0/24 via 192.168.40.2
+
+    cache03:
+    ip r | grep via | grep tun | sed 's/^/sudo ip r del /g' | while read line; do $line; done && sudo ip r add 192.168.10.0/24 via 192.168.30.1 && sudo ip r add 192.168.20.0/24 via 192.168.30.1 && sudo ip r add 192.168.40.0/24 via 192.168.50.2 && sudo ip r add 192.168.60.0/24 via 192.168.50.2
+
+    cache04:
+    ip r | grep via | grep tun | sed 's/^/sudo ip r del /g' | while read line; do $line; done && sudo ip r add 192.168.10.0/24 via 192.168.40.1 && sudo ip r add 192.168.20.0/24 via 192.168.40.1 && sudo ip r add 192.168.30.0/24 via 192.168.50.1
+   
+    web01:
+    sudo ip r add 192.168.0.0/16 via 192.168.60.1
+
+    各ノードからWebサーバに疎通することを確認する
+    ping -c3 192.168.60.2
+
+** RoutingManagerの起動
+
+   scp -r furin/ user@web01:~
+   scp -r furin/ user@cache01:~
+   scp -r furin/ user@cache02:~
+   scp -r furin/ user@cache03:~
+   scp -r furin/ user@cache04:~
+
+   web01, cache04, cache03, cache02, cache01 の順でRoutingManagerを起動する．
+   user@web01~$ cd furin
+   user@web01~/furin$ sudo ./main.rb
+
+   別のターミナルを開き，cache01にアクセスする．
+   ip r | grep 192.168.60.2
+   を実行して，web01(192.168.60.2)へのアクセスがどのノードを経由するかを確認する．
+
+   ip r | grep 192.168.60.2
+   192.168.60.2 via 192.168.20.2 dev tun1
+
+   例えば上記の例だと，cache02を経由していることが分かる．
+   別のターミナルでcache02にログインし，cache01への送信速度を制限してみる．
+
+   ip r | grep link | grep 20
+   192.168.20.0/24 dev tun0 proto kernel scope link src 192.168.20.2
+
+   tun0を使用しているので，この速度を20Mbpsに制限してみる．
+
+   cd ~/furin/
+   sudo ./ratelimit.rb tun0 20
+   
+   
+
+   
